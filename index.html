@@ -89,6 +89,11 @@ footer a{color:var(--accent)}
 
 <main>
   <div class="panel">
+    <h3>X axis</h3>
+    <div class="seg" id="xaxis">
+      <button data-v="age" class="on">Age</button>
+      <button data-v="cohort">Birth year</button>
+    </div>
     <h3>Sex</h3>
     <div class="seg" id="sex">
       <button data-v="H" class="on">Men</button>
@@ -104,24 +109,20 @@ footer a{color:var(--accent)}
       <button data-v="pct" class="on">% of births</button>
       <button data-v="abs">Count</button>
     </div>
-    <h3>Age range</h3>
-    <div class="rangewrap">
-      <span class="rv" id="amin-v">0</span>
-      <input type="range" id="amin" min="0" max="118" value="0">
+    <div id="agerange-block">
+      <h3 id="range-title">Age range</h3>
+      <div class="rangewrap">
+        <span class="rv" id="amin-v">0</span>
+        <input type="range" id="amin" min="0" max="118" value="0">
+      </div>
+      <div class="rangewrap">
+        <span class="rv" id="amax-v">118</span>
+        <input type="range" id="amax" min="0" max="118" value="118">
+      </div>
     </div>
-    <div class="rangewrap">
-      <span class="rv" id="amax-v">118</span>
-      <input type="range" id="amax" min="0" max="118" value="118">
-    </div>
-    <h3>Cohorts</h3>
-    <div class="mini">
-      <button data-act="none">None</button>
-      <button data-act="all">All</button>
-      <button data-act="ext">Extinct</button>
-      <button data-act="dec">Every 10th</button>
-      <button data-act="five">Every 5th</button>
-    </div>
-    <input id="search" type="text" placeholder="Filter, e.g. 192">
+    <h3 id="list-title">Cohorts</h3>
+    <div class="mini" id="mini"></div>
+    <input id="search" type="text" placeholder="Filter…">
     <div class="list" id="list"></div>
   </div>
 
@@ -149,114 +150,200 @@ const DATA={"H":{"1891":{"b":443240,"a0":81,"v":[48382,42769,37458,32096,27216,2
 const ETEINTE={"H": 1916, "F": 1911};
 const ANNEE_FERMEE=2024;
 
-const S={sex:'H',mode:'cum',scale:'pct',amin:0,amax:118,sel:new Set()};
+const S={xaxis:'age',sex:'H',mode:'cum',scale:'pct',amin:0,amax:118,
+         sel:new Set(),       // en mode 'age' : cohortes cochees ; en 'cohort' : ages coches
+         cmin:1891,cmax:2026};
 let chart=null;
 
 const cohortes=(s)=>Object.keys(DATA[s]).map(Number).sort((a,b)=>a-b);
 const cd=(s,an)=>DATA[s][an];
 const ageMax=(s,an)=>{const d=cd(s,an);return d.a0+d.v.length-1;};
+const ageMaxSexe=(s)=>Math.max(...cohortes(s).map(an=>ageMax(s,an)));
 const eteinte=(s,an)=>an<=ETEINTE[s];
 
-/* valeur brute a un age : cumul (a atteint) ou deces exact */
+/* valeur brute pour (cohorte, age) : cumul (a atteint) ou deces exact */
 function valeur(s,an,age){
-  const d=cd(s,an); const i=age-d.a0;
+  const d=cd(s,an); if(!d) return null;
+  const i=age-d.a0;
   if(i<0||i>=d.v.length) return null;
   const cur=d.v[i]; if(cur===null||cur===undefined) return null;
   if(S.mode==='cum') return cur;
-  // deces exact = cumul(age) - cumul(age+1)  (0 au-dela du dernier age)
   let nxt=0;
   for(let j=i+1;j<d.v.length;j++){ if(d.v[j]!==null&&d.v[j]!==undefined){nxt=d.v[j];break;} }
   return cur-nxt;
 }
-/* segment encore modifiable ? -> trait pointille */
+/* valeur affichee (brute ou % des naissances) */
+function valAff(s,an,age){
+  const v=valeur(s,an,age); if(v===null) return null;
+  if(S.scale!=='pct') return v;
+  const B=cd(s,an).b; if(!B) return null;
+  return 100*v/B;
+}
+/* segment/point encore modifiable ? -> pointille */
 function ouvert(s,an,age){
   if(eteinte(s,an)) return false;             // cohorte eteinte : tout est fige
   if(S.mode==='cum') return true;             // un survivant s'ajoutera partout
   return (an+age)>ANNEE_FERMEE;               // on peut encore mourir a cet age
 }
-/* Degrade par sexe : bleus pour les hommes, rouges pour les femmes.
-   Du ton clair (cohortes les plus anciennes) au ton fonce (les plus recentes),
-   choisi pour rester lisible sur fond blanc. */
+
+/* --- palettes --- */
 const RAMPE={H:[[150,193,232],[8,42,102]], F:[[242,157,157],[122,3,30]]};
-function couleur(s,an,mn,mx){
+function couleurCohorte(s,an,mn,mx){
   const t=(an-mn)/Math.max(1,mx-mn);
   const [c1,c2]=RAMPE[s]||RAMPE.H;
   return `rgb(${Math.round(c1[0]+(c2[0]-c1[0])*t)},${Math.round(c1[1]+(c2[1]-c1[1])*t)},${Math.round(c1[2]+(c2[2]-c1[2])*t)})`;
 }
-
-function construireListe(){
-  const s=S.sex, cos=cohortes(s), mn=cos[0], mx=cos[cos.length-1];
-  const q=document.getElementById('search').value.trim();
-  const box=document.getElementById('list'); box.innerHTML='';
-  cos.filter(an=>!q||String(an).includes(q)).forEach(an=>{
-    const r=document.createElement('label'); r.className='row';
-    r.innerHTML=`<input type="checkbox" ${S.sel.has(an)?'checked':''}>`+
-      `<i class="sw" style="background:${couleur(s,an,mn,mx)}"></i>`+
-      `<span class="yr">${an}</span>`+
-      `<span class="tag">${eteinte(s,an)?'extinct':'living'}</span>`;
-    r.querySelector('input').addEventListener('change',e=>{
-      if(e.target.checked)S.sel.add(an); else S.sel.delete(an);
-      dessiner();
-    });
-    box.appendChild(r);
-  });
+/* en mode "birth year", chaque courbe = un age : degrade clair (jeune) -> fonce (vieux) */
+function couleurAge(s,age,mn,mx){
+  const t=(age-mn)/Math.max(1,mx-mn);
+  const [c1,c2]=RAMPE[s]||RAMPE.H;
+  return `rgb(${Math.round(c1[0]+(c2[0]-c1[0])*t)},${Math.round(c1[1]+(c2[1]-c1[1])*t)},${Math.round(c1[2]+(c2[2]-c1[2])*t)})`;
 }
 
-function dessiner(){
+/* ====================== PANNEAU DE SELECTION ====================== */
+function construireListe(){
   const s=S.sex;
-  const pct=S.scale==='pct';
-  // le degrade s'etale sur les cohortes SELECTIONNEES (et non toute la plage),
-  // pour qu'elles occupent toujours tout l'eventail de couleurs et restent
-  // bien distinctes meme quand on n'affiche que les cohortes eteintes.
-  const selArr=[...S.sel].sort((a,b)=>a-b);
-  const mn=selArr.length?selArr[0]:1900, mx=selArr.length?selArr[selArr.length-1]:2000;
-  const sets=[];
-  selArr.forEach(an=>{
-    const d=cd(s,an); if(!d) return;
-    const B=d.b;
-    if(pct&&!B) return;                       // pas de naissances : % impossible
-    const pts=[],flags=[];
-    for(let age=S.amin;age<=S.amax;age++){
-      const v=valeur(s,an,age);
-      if(v===null){continue;}
-      pts.push({x:age,y:pct?100*v/B:v});
-      flags.push(ouvert(s,an,age));
-    }
-    if(pts.length<1) return;
-    const col=couleur(s,an,mn,mx);
-    sets.push({
-      label:String(an),data:pts,borderColor:col,backgroundColor:col,
-      borderWidth:1.8,pointRadius:0,pointHoverRadius:4,tension:.18,
-      // un segment est pointille des que son extremite droite est modifiable
-      segment:{borderDash:c=>flags[c.p1DataIndex]?[5,4]:undefined}
+  const box=document.getElementById('list'); box.innerHTML='';
+  const q=document.getElementById('search').value.trim();
+  if(S.xaxis==='age'){
+    // on coche des COHORTES
+    const cos=cohortes(s), mn=cos[0], mx=cos[cos.length-1];
+    cos.filter(an=>!q||String(an).includes(q)).forEach(an=>{
+      const r=document.createElement('label'); r.className='row';
+      r.innerHTML=`<input type="checkbox" ${S.sel.has(an)?'checked':''}>`+
+        `<i class="sw" style="background:${couleurCohorte(s,an,mn,mx)}"></i>`+
+        `<span class="yr">${an}</span>`+
+        `<span class="tag">${eteinte(s,an)?'extinct':'living'}</span>`;
+      r.querySelector('input').addEventListener('change',e=>{
+        if(e.target.checked)S.sel.add(an); else S.sel.delete(an);
+        dessiner();
+      });
+      box.appendChild(r);
     });
+  }else{
+    // on coche des AGES
+    const hi=ageMaxSexe(s);
+    const ages=[]; for(let a=0;a<=hi;a++) ages.push(a);
+    ages.filter(a=>!q||String(a).includes(q)).forEach(a=>{
+      const r=document.createElement('label'); r.className='row';
+      r.innerHTML=`<input type="checkbox" ${S.sel.has(a)?'checked':''}>`+
+        `<i class="sw" style="background:${couleurAge(s,a,0,hi)}"></i>`+
+        `<span class="yr">${a} yr</span>`;
+      r.querySelector('input').addEventListener('change',e=>{
+        if(e.target.checked)S.sel.add(a); else S.sel.delete(a);
+        dessiner();
+      });
+      box.appendChild(r);
+    });
+  }
+}
+
+/* raccourcis, dependants du mode */
+function construireMini(){
+  const mini=document.getElementById('mini'); mini.innerHTML='';
+  const defs = S.xaxis==='age'
+    ? [['none','None'],['all','All'],['ext','Extinct'],['dec','Every 10th'],['five','Every 5th']]
+    : [['none','None'],['milestones','80/90/100'],['tens','Every 10 yr'],['fives','Every 5 yr'],['centplus','100+']];
+  defs.forEach(([act,lab])=>{
+    const b=document.createElement('button'); b.dataset.act=act; b.textContent=lab;
+    b.addEventListener('click',()=>appliquerRaccourci(act));
+    mini.appendChild(b);
   });
-  const yl=pct?(S.mode==='cum'?'% of births still alive at that age':'% of births dying at that exact age')
-             :(S.mode==='cum'?'People reaching that age':'Deaths at that exact age');
+}
+function appliquerRaccourci(act){
+  const s=S.sex;
+  if(S.xaxis==='age'){
+    const cos=cohortes(s);
+    if(act==='none')S.sel=new Set();
+    else if(act==='all')S.sel=new Set(cos);
+    else if(act==='ext')S.sel=new Set(cos.filter(an=>eteinte(s,an)));
+    else if(act==='dec')S.sel=new Set(cos.filter(an=>an%10===0));
+    else if(act==='five')S.sel=new Set(cos.filter(an=>an%5===0));
+  }else{
+    const hi=ageMaxSexe(s);
+    const ages=[];for(let a=0;a<=hi;a++)ages.push(a);
+    if(act==='none')S.sel=new Set();
+    else if(act==='milestones')S.sel=new Set([80,90,100].filter(a=>a<=hi));
+    else if(act==='tens')S.sel=new Set(ages.filter(a=>a%10===0));
+    else if(act==='fives')S.sel=new Set(ages.filter(a=>a%5===0));
+    else if(act==='centplus')S.sel=new Set(ages.filter(a=>a>=100));
+  }
+  construireListe();dessiner();
+}
+
+/* ====================== TRACE ====================== */
+function dessiner(){
+  const s=S.sex, pct=S.scale==='pct';
+  const sets=[];
+  if(S.xaxis==='age'){
+    // X = age ; une courbe par COHORTE cochee
+    const selArr=[...S.sel].sort((a,b)=>a-b);
+    const mn=selArr.length?selArr[0]:1900, mx=selArr.length?selArr[selArr.length-1]:2000;
+    selArr.forEach(an=>{
+      if(pct&&!cd(s,an).b) return;
+      const pts=[],flags=[];
+      for(let age=S.amin;age<=S.amax;age++){
+        const v=valAff(s,an,age); if(v===null) continue;
+        pts.push({x:age,y:v}); flags.push(ouvert(s,an,age));
+      }
+      if(!pts.length) return;
+      const col=couleurCohorte(s,an,mn,mx);
+      sets.push({label:String(an),data:pts,borderColor:col,backgroundColor:col,
+        borderWidth:1.8,pointRadius:0,pointHoverRadius:4,tension:.18,
+        segment:{borderDash:c=>flags[c.p1DataIndex]?[5,4]:undefined}});
+    });
+  }else{
+    // X = annee de naissance ; une courbe par AGE coche
+    const selArr=[...S.sel].sort((a,b)=>a-b);
+    const hi=ageMaxSexe(s);
+    const cos=cohortes(s).filter(an=>an>=S.cmin&&an<=S.cmax);
+    selArr.forEach(age=>{
+      const pts=[],flags=[];
+      cos.forEach(an=>{
+        if(pct&&!cd(s,an).b) return;
+        const v=valAff(s,an,age); if(v===null) return;
+        pts.push({x:an,y:v}); flags.push(ouvert(s,an,age));
+      });
+      if(!pts.length) return;
+      const col=couleurAge(s,age,0,hi);
+      sets.push({label:age+' yr',data:pts,borderColor:col,backgroundColor:col,
+        borderWidth:1.8,pointRadius:0,pointHoverRadius:4,tension:.18,
+        segment:{borderDash:c=>flags[c.p1DataIndex]?[5,4]:undefined}});
+    });
+  }
+
+  const yl=pct?(S.mode==='cum'?'% of births still alive':'% of births dying that year')
+             :(S.mode==='cum'?'People reaching the age':'Deaths at the age');
+  const xl=S.xaxis==='age'?'Age':'Birth year';
+  const xmin=S.xaxis==='age'?S.amin:S.cmin, xmax=S.xaxis==='age'?S.amax:S.cmax;
   const cfg={type:'line',data:{datasets:sets},options:{
     responsive:true,maintainAspectRatio:false,animation:{duration:300},
     interaction:{mode:'nearest',intersect:false},
     scales:{
-      x:{type:'linear',min:S.amin,max:S.amax,title:{display:true,text:'Age',color:'#5c6b7f'},
+      x:{type:'linear',min:xmin,max:xmax,title:{display:true,text:xl,color:'#5c6b7f'},
          grid:{color:'#e6eaf0'},ticks:{color:'#5c6b7f'}},
       y:{title:{display:true,text:yl,color:'#5c6b7f'},grid:{color:'#e6eaf0'},
          ticks:{color:'#5c6b7f'}}},
     plugins:{legend:{display:sets.length<=14,labels:{color:'#182231',boxWidth:14,font:{size:11}}},
       tooltip:{backgroundColor:'#182231',borderColor:'#182231',borderWidth:1,
         titleColor:'#ffffff',bodyColor:'#ffffff',padding:9,
-        callbacks:{title:(it)=>'Age '+it[0].parsed.x,
-          label:(c)=>{const v=c.parsed.y;
-            return 'Cohort '+c.dataset.label+' : '+(pct?v.toFixed(4)+'%':Math.round(v).toLocaleString('en'));}}}}
+        callbacks:{title:(it)=>S.xaxis==='age'?'Age '+it[0].parsed.x:'Birth year '+it[0].parsed.x,
+          label:(c)=>{const v=c.parsed.y;const who=S.xaxis==='age'?'Cohort '+c.dataset.label:c.dataset.label;
+            return who+' : '+(pct?v.toFixed(4)+'%':Math.round(v).toLocaleString('en'));}}}}
   }};
   if(chart)chart.destroy();
   chart=new Chart(document.getElementById('cv'),cfg);
+
+  const mesure=S.mode==='cum'?'Reached age':'Died at exact age';
   document.getElementById('title').textContent=
-    (S.mode==='cum'?'Reached age':'Died at exact age')+' — '+(s==='H'?'Men':'Women');
-  document.getElementById('hint').textContent=
-    sets.length?`${sets.length} cohort${sets.length>1?'s':''} shown. Dashed = still open to change.`
-               :'Tick some cohorts on the left to draw curves.';
+    mesure+' — '+(s==='H'?'Men':'Women')+(S.xaxis==='cohort'?' — across cohorts':'');
+  const n=sets.length;
+  document.getElementById('hint').textContent = n
+    ? `${n} ${S.xaxis==='age'?'cohort':'age'}${n>1?'s':''} shown. Dashed = still open to change.`
+    : (S.xaxis==='age'?'Tick some cohorts on the left.':'Tick some ages on the left.');
 }
 
+/* ====================== CONTROLES ====================== */
 function seg(id,cb){
   document.getElementById(id).querySelectorAll('button').forEach(b=>{
     b.addEventListener('click',()=>{
@@ -265,29 +352,38 @@ function seg(id,cb){
     });
   });
 }
-seg('sex',v=>{S.sex=v;bornesAge();S.sel=new Set(defautSel());construireListe();dessiner();});
+seg('xaxis',v=>{S.xaxis=v;basculerAxe();});
+seg('sex',v=>{S.sex=v;majPlages();S.sel=new Set(defautSel());construireListe();dessiner();});
 seg('mode',v=>{S.mode=v;dessiner();});
 seg('scale',v=>{S.scale=v;dessiner();});
-
-document.querySelectorAll('.mini button').forEach(b=>b.addEventListener('click',()=>{
-  const s=S.sex,cos=cohortes(s);
-  const a=b.dataset.act;
-  if(a==='none')S.sel=new Set();
-  else if(a==='all')S.sel=new Set(cos);
-  else if(a==='ext')S.sel=new Set(cos.filter(an=>eteinte(s,an)));
-  else if(a==='dec')S.sel=new Set(cos.filter(an=>an%10===0));
-  else if(a==='five')S.sel=new Set(cos.filter(an=>an%5===0));
-  construireListe();dessiner();
-}));
 document.getElementById('search').addEventListener('input',construireListe);
 
-function bornesAge(){
-  const s=S.sex,cos=cohortes(s);
-  const hi=Math.max(...cos.map(an=>ageMax(s,an)));
-  ['amin','amax'].forEach(id=>{document.getElementById(id).max=hi;});
-  if(S.amax>hi)S.amax=hi;
-  document.getElementById('amax').value=S.amax;
-  document.getElementById('amax-v').textContent=S.amax;
+/* bascule Age <-> Birth year : change tout le panneau */
+function basculerAxe(){
+  const estAge=S.xaxis==='age';
+  document.getElementById('agerange-block').style.display=estAge?'':'none';
+  document.getElementById('list-title').textContent=estAge?'Cohorts':'Ages';
+  document.getElementById('search').placeholder=estAge?'Filter years, e.g. 192':'Filter ages, e.g. 100';
+  majPlages();
+  construireMini();
+  S.sel=new Set(defautSel());
+  construireListe();
+  dessiner();
+}
+
+/* curseurs de plage (ages en mode 'age', bornes de cohortes en mode 'cohort') */
+function majPlages(){
+  const s=S.sex;
+  if(S.xaxis==='age'){
+    const hi=ageMaxSexe(s);
+    const amin=document.getElementById('amin'),amax=document.getElementById('amax');
+    amin.max=hi;amax.max=hi;
+    if(S.amax>hi||S.amax===undefined)S.amax=hi;
+    if(S.amin>S.amax)S.amin=0;
+    amin.value=S.amin;amax.value=S.amax;
+    document.getElementById('amin-v').textContent=S.amin;
+    document.getElementById('amax-v').textContent=S.amax;
+  }
 }
 document.getElementById('amin').addEventListener('input',e=>{
   S.amin=+e.target.value;
@@ -300,13 +396,29 @@ document.getElementById('amax').addEventListener('input',e=>{
     document.getElementById('amin-v').textContent=S.amin;}
   document.getElementById('amax-v').textContent=S.amax;dessiner();});
 
-/* selection de depart : TOUTES les cohortes eteintes (chiffres definitifs) */
+/* selection par defaut selon le mode */
 function defautSel(){
   const s=S.sex;
-  return cohortes(s).filter(an=>eteinte(s,an));
+  if(S.xaxis==='age'){
+    // toutes les cohortes eteintes
+    return cohortes(s).filter(an=>eteinte(s,an));
+  }
+  // mode birth year : l'age 100 seul (vue par defaut demandee)
+  return [100];
 }
-bornesAge();
-S.sel=new Set(defautSel());
+
+/* ====================== INITIALISATION ======================
+   Vue de depart demandee : evolution, au fil des cohortes, du % d'hommes
+   ayant atteint 100 ans, sur les cohortes eteintes. */
+S.xaxis='cohort'; S.sex='H'; S.mode='cum'; S.scale='pct';
+S.cmin=1891; S.cmax=ETEINTE['H'];        // cohortes eteintes uniquement
+document.querySelector('#xaxis [data-v="cohort"]').classList.add('on');
+document.querySelector('#xaxis [data-v="age"]').classList.remove('on');
+document.getElementById('agerange-block').style.display='none';
+document.getElementById('list-title').textContent='Ages';
+document.getElementById('search').placeholder='Filter ages, e.g. 100';
+construireMini();
+S.sel=new Set([100]);
 construireListe();
 dessiner();
 </script>
