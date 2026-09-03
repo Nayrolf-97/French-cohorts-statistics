@@ -120,6 +120,17 @@ footer a{color:var(--accent)}
         <input type="range" id="amax" min="0" max="118" value="118">
       </div>
     </div>
+    <div id="cohrange-block" style="display:none">
+      <h3>Birth-year range</h3>
+      <div class="rangewrap">
+        <span class="rv" id="cmin-v">1891</span>
+        <input type="range" id="cmin" min="1891" max="2026" value="1891">
+      </div>
+      <div class="rangewrap">
+        <span class="rv" id="cmax-v">2026</span>
+        <input type="range" id="cmax" min="1891" max="2026" value="2026">
+      </div>
+    </div>
     <h3 id="list-title">Cohorts</h3>
     <div class="mini" id="mini"></div>
     <input id="search" type="text" placeholder="Filter…">
@@ -153,6 +164,13 @@ const ANNEE_FERMEE=2024;
 const S={xaxis:'age',sex:'H',mode:'cum',scale:'pct',amin:0,amax:118,
          sel:new Set(),       // en mode 'age' : cohortes cochees ; en 'cohort' : ages coches
          cmin:1891,cmax:2026};
+/* Memoire independante des deux modes, pour retrouver son etat en basculant.
+   'vu' passe a true la 1re fois qu'on entre dans le mode (sinon on applique
+   la selection par defaut). */
+const MEM={
+  age:   {sel:null, amin:0,   amax:118,  vu:false},
+  cohort:{sel:null, cmin:1891, cmax:2026, vu:false},
+};
 let chart=null;
 
 const cohortes=(s)=>Object.keys(DATA[s]).map(Number).sort((a,b)=>a-b);
@@ -352,28 +370,44 @@ function seg(id,cb){
     });
   });
 }
-seg('xaxis',v=>{S.xaxis=v;basculerAxe();});
-seg('sex',v=>{S.sex=v;majPlages();S.sel=new Set(defautSel());construireListe();dessiner();});
+seg('xaxis',v=>{if(v===S.xaxis)return; const ancien=S.xaxis; S.xaxis=v; basculerAxe(ancien);});
+seg('sex',v=>{S.sex=v;MEM.age.vu=false;MEM.cohort.vu=false;
+  majPlages();S.sel=new Set(defautSel());construireListe();dessiner();});
 seg('mode',v=>{S.mode=v;dessiner();});
 seg('scale',v=>{S.scale=v;dessiner();});
 document.getElementById('search').addEventListener('input',construireListe);
 
-/* bascule Age <-> Birth year : change tout le panneau */
-function basculerAxe(){
+/* enregistre l'etat (fenetre + selection) d'un mode dans MEM */
+function sauverMode(mode){
+  if(mode==='age'){ MEM.age.sel=new Set(S.sel); MEM.age.amin=S.amin; MEM.age.amax=S.amax; MEM.age.vu=true; }
+  else{ MEM.cohort.sel=new Set(S.sel); MEM.cohort.cmin=S.cmin; MEM.cohort.cmax=S.cmax; MEM.cohort.vu=true; }
+}
+
+/* bascule Age <-> Birth year : change tout le panneau, en restaurant la memoire */
+function basculerAxe(ancien){
+  if(ancien) sauverMode(ancien);               // memoriser le mode qu'on quitte
   const estAge=S.xaxis==='age';
   document.getElementById('agerange-block').style.display=estAge?'':'none';
+  document.getElementById('cohrange-block').style.display=estAge?'none':'';
   document.getElementById('list-title').textContent=estAge?'Cohorts':'Ages';
   document.getElementById('search').placeholder=estAge?'Filter years, e.g. 192':'Filter ages, e.g. 100';
-  majPlages();
+  const m=MEM[S.xaxis];
+  if(m.vu){                                     // deja visite : restaurer
+    if(estAge){ S.amin=m.amin; S.amax=m.amax; } else { S.cmin=m.cmin; S.cmax=m.cmax; }
+    majPlages();
+    S.sel=new Set(m.sel);
+  }else{                                        // 1re visite : valeurs par defaut
+    majPlages();
+    S.sel=new Set(defautSel());
+  }
   construireMini();
-  S.sel=new Set(defautSel());
   construireListe();
   dessiner();
 }
 
 /* curseurs de plage (ages en mode 'age', bornes de cohortes en mode 'cohort') */
 function majPlages(){
-  const s=S.sex;
+  const s=S.sex, cos=cohortes(s);
   if(S.xaxis==='age'){
     const hi=ageMaxSexe(s);
     const amin=document.getElementById('amin'),amax=document.getElementById('amax');
@@ -383,6 +417,16 @@ function majPlages(){
     amin.value=S.amin;amax.value=S.amax;
     document.getElementById('amin-v').textContent=S.amin;
     document.getElementById('amax-v').textContent=S.amax;
+  }else{
+    const lo=cos[0], hi=cos[cos.length-1];
+    const cmin=document.getElementById('cmin'),cmax=document.getElementById('cmax');
+    cmin.min=lo;cmin.max=hi;cmax.min=lo;cmax.max=hi;
+    if(S.cmin<lo||S.cmin===undefined)S.cmin=lo;
+    if(S.cmax>hi||S.cmax===undefined)S.cmax=hi;
+    if(S.cmin>S.cmax){S.cmin=lo;S.cmax=hi;}
+    cmin.value=S.cmin;cmax.value=S.cmax;
+    document.getElementById('cmin-v').textContent=S.cmin;
+    document.getElementById('cmax-v').textContent=S.cmax;
   }
 }
 document.getElementById('amin').addEventListener('input',e=>{
@@ -395,6 +439,16 @@ document.getElementById('amax').addEventListener('input',e=>{
   if(S.amax<S.amin){S.amin=S.amax;document.getElementById('amin').value=S.amin;
     document.getElementById('amin-v').textContent=S.amin;}
   document.getElementById('amax-v').textContent=S.amax;dessiner();});
+document.getElementById('cmin').addEventListener('input',e=>{
+  S.cmin=+e.target.value;
+  if(S.cmin>S.cmax){S.cmax=S.cmin;document.getElementById('cmax').value=S.cmax;
+    document.getElementById('cmax-v').textContent=S.cmax;}
+  document.getElementById('cmin-v').textContent=S.cmin;dessiner();});
+document.getElementById('cmax').addEventListener('input',e=>{
+  S.cmax=+e.target.value;
+  if(S.cmax<S.cmin){S.cmin=S.cmax;document.getElementById('cmin').value=S.cmin;
+    document.getElementById('cmin-v').textContent=S.cmin;}
+  document.getElementById('cmax-v').textContent=S.cmax;dessiner();});
 
 /* selection par defaut selon le mode */
 function defautSel(){
@@ -415,10 +469,14 @@ S.cmin=1891; S.cmax=ETEINTE['H'];        // cohortes eteintes uniquement
 document.querySelector('#xaxis [data-v="cohort"]').classList.add('on');
 document.querySelector('#xaxis [data-v="age"]').classList.remove('on');
 document.getElementById('agerange-block').style.display='none';
+document.getElementById('cohrange-block').style.display='';
 document.getElementById('list-title').textContent='Ages';
 document.getElementById('search').placeholder='Filter ages, e.g. 100';
+majPlages();
 construireMini();
 S.sel=new Set([100]);
+// enregistrer cet etat de depart comme memoire du mode 'cohort'
+MEM.cohort={sel:new Set([100]),cmin:S.cmin,cmax:S.cmax,vu:true};
 construireListe();
 dessiner();
 </script>
